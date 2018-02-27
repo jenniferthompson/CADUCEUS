@@ -91,3 +91,38 @@ oneobs_df <- map2_dfr(
   ),
   .f = export_oneobs
 )
+
+## -- RASS, CAM, CADUCEUS info for each study ----------------------------------
+## Function which extracts the variables we want from a given database, names
+## them consistently, and returns a final data.frame with >1 record per patient
+export_daily <- function(rctoken, cad_fname){
+  df <- import_df(
+    rctoken = rctoken,
+    id_field = "id",
+    fields = c("id", "rass_actual_1", "rass_actual_2", "cam_1", "cam_2"),
+    forms = cad_fname
+  ) %>%
+    ## Remove "form complete" variable
+    dplyr::select(-matches("^caduceus\\_.+\\_complete$"))
+  
+  ## All names are consistent except for enzyme variables; should be two AChE,
+  ## one BChE
+  names(df) <- str_replace_all(
+    names(df),
+    c("^cad\\_ache$" = "cad_ache_ul",
+      "^cad\\_ache_2" = "cad_ache_ughb",
+      "^cad\\_bche$" = "cad_bche_ul")
+  )
+
+  return(df)
+}
+
+## Extract raw data for each study and combine into a single df
+daily_df <- map2_dfr(
+  .x = paste0(c("MENDS2", "MOSAIC", "INSIGHT"), "_IH_TOKEN"),
+  .y = c("caduceus_2", "caduceus_2", "caduceus_log"),
+  .f = export_daily
+)
+
+# ## skim for reasonableness
+# skimr::skim(daily_df)

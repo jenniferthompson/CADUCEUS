@@ -7,6 +7,9 @@ source("data_functions.R")
   ## calls RCurl, glue, dplyr, stringr
 
 library(purrr)
+library(dplyr)
+library(tidyr)
+library(stringr)
 
 ## Things we need from each database:
 ## - All CADUCEUS-specific variables (CADUCEUS form)
@@ -131,7 +134,90 @@ daily_df <- map2_dfr(
   .x = paste0(c("MENDS2", "MOSAIC", "INSIGHT"), "_IH_TOKEN"),
   .y = c("caduceus_2", "caduceus_2", "caduceus_log"),
   .f = export_daily
-)
+) %>%
+  ## Data cleaning: different capitalizations in different studies
+  mutate(
+    cad_no = ifelse(
+      tolower(cad_no) == "patient/surrogate refused",
+      "Patient/surrogate refused",
+      cad_no
+    )
+  )
 
 # ## skim for reasonableness
 # skimr::skim(daily_df)
+
+## Calculate mental status at each assessment, on each day
+mental_df <- daily_df %>%
+  dplyr::select(
+    id, redcap_event_name, starts_with("rass"), starts_with("cam")
+  ) %>%
+  ## Reshape: eventual goal = one row per assessment, with vars for RASS, CAM
+  gather(key = asmt_info, value = asmt_score, rass_actual_1:cam_2) %>%
+  mutate(asmt_info = gsub("\\_actual", "", asmt_info)) %>%
+  separate(asmt_info, into = c("asmt_type", "asmt_time"), sep = "_") %>%
+  spread(key = asmt_type, value = asmt_score) %>%
+  ## Data cleaning:
+  ## - CAM is misspelled as "Postive" in some studies; UTA spelled differently
+  ## - Change all "Not Dones" to NA
+  ## - Make RASS numeric
+  mutate_at(vars("cam", "rass"), ~ ifelse(toupper(.) == "NOT DONE", NA, .)) %>%
+  mutate(
+    cam = str_replace_all(
+      cam,
+      c("Postive" = "Positive",
+        "Unable to [Aa]ssess" = "UTA")
+    ),
+    rass = as.numeric(rass)
+  ) %>%
+  ## Determine mental status at each time point:
+  ## - RASS not missing & -4, -5, OR RASS missing & CAM UTA: coma; otherwise,
+  ## - CAM not missing and Positive: delirious; otherwise,
+  ## - CAM not missing and Negative: normal; otherwise,
+  ## - Normal
+  mutate(
+    mental_status = case_when(
+      !is.na(rass) & rass %in% c(-4, -5) |
+        is.na(rass) & cam == "UTA"         ~ "Comatose",
+      !is.na(cam) & cam == "Positive"      ~ "Delirious",
+      !is.na(cam) & cam == "Negative"      ~ "Normal",
+      TRUE                                 ~ as.character(NA)
+    )
+  )
+
+## Summarize mental status by *day*
+mental_day_df <- mental_df %>%
+  group_by(id, redcap_event_name) %>%
+  summarise(
+    n_asmts = sum(!is.na(mental_status)),
+    coma = ifelse(
+      n_asmts == 0, NA,
+      sum(mental_status == "Comatose", na.rm = TRUE) > 0
+    ),
+    delirium = ifelse(
+      n_asmts == 0, NA,
+      sum(mental_status == "Delirious", na.rm = TRUE) > 0
+    ),
+    normal = ifelse(
+      n_asmts == 0, NA,
+      sum(mental_status == "Normal", na.rm = TRUE) > 0
+    )
+  ) %>%
+  ungroup()
+
+## Merge daily info onto daily_df, keep only needed variables
+daily_df <-
+  left_join(daily_df, mental_day_df, by = c("id", "redcap_event_name")) %>%
+  dplyr::select(id, redcap_event_name, cad_yn:cad_bche_ul, coma:normal)
+
+## Summarize mental status by *patient* (days of delirium, coma)
+mental_pt <- mental_day_df %>%
+  group_by(id) %>%
+  summarise(
+    n_days = sum(n_asmts > 0, na.rm = TRUE),
+    days_del = ifelse(n_days == 0, NA, sum(delirium, na.rm = TRUE)),
+    days_coma = ifelse(n_days == 0, NA, sum(coma, na.rm = TRUE))
+  )
+
+## Add patient info onto oneobs_df
+oneobs_df <- left_join(oneobs_df, mental_pt, by = "id")

@@ -90,7 +90,16 @@ oneobs_df <- map2_dfr(
     c("id", "dob", "gender_birth", "gender_identity", "enroll_dttm")
   ),
   .f = export_oneobs
-)
+) %>%
+  ## Calculate age at enrollment
+  mutate(
+    dob = as.Date(dob, format = "%Y-%m-%d"),
+    enroll_dttm = as.POSIXct(enroll_dttm, format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    enroll_date = as.Date(enroll_dttm),
+    age = as.numeric(difftime(enroll_date, dob, units = "days")) / 365.25
+  ) %>%
+  ## Remove identifiers
+  dplyr::select(id, gender, age)
 
 ## -- RASS, CAM, CADUCEUS info for each study ----------------------------------
 ## Function which extracts the variables we want from a given database, names

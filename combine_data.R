@@ -221,3 +221,6 @@ mental_pt <- mental_day_df %>%
 
 ## Add patient info onto oneobs_df
 oneobs_df <- left_join(oneobs_df, mental_pt, by = "id")
+
+## Remove unwanted datasets from workspace
+rm("mental_day_df", "mental_df", "mental_pt")

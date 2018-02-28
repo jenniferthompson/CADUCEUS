@@ -1,0 +1,115 @@
+---
+title: "CADUCEUS Preliminary Results"
+subtitle: "Presentation at Kohler, April 2018"
+author: "Jennifer Thompson, MPH; Supervisor: Rameela Chandrasekhar, PhD"
+output:
+  html_notebook:
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+CADUCEUS is an ancillary study enrolling patients from the MENDS2, MOSAIC, and
+INSIGHT studies in progress at Vanderbilt University Medical Center, looking at
+three enzyme levels (BChE, AChE, and AChe in hemoglobin) during the course of
+critical illness. This preliminary analysis describes study results as of April
+2018.
+
+```{r setup, results = "hide"}
+knitr::opts_chunk$set(message = FALSE)
+
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(forcats))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(glue))
+suppressPackageStartupMessages(library(kableExtra))
+suppressPackageStartupMessages(library(captioner))
+suppressPackageStartupMessages(library(rms))
+suppressPackageStartupMessages(library(naniar))
+suppressPackageStartupMessages(library(sparkline))
+
+## Hmisc setup for nicely printing summaryM output
+mu <- markupSpecs$html
+
+## -- General helper functions (summary stats, formatting/printing) ------------
+factor_tf <-
+  function(x){ factor(as.numeric(x), levels = 1:0, labels = c("Yes", "No")) }
+format_comma <- partial(format, big.mark = ",")
+sum_na <- partial(sum, na.rm = TRUE)
+q25 <- partial(quantile, probs = 0.25, na.rm = TRUE)
+q50 <- partial(quantile, probs = 0.50, na.rm = TRUE)
+q75 <- partial(quantile, probs = 0.75, na.rm = TRUE)
+mean_na <- partial(mean, na.rm = TRUE)
+sd_na <- partial(sd, na.rm = TRUE)
+rndformat <- function(x, digits = 2){ format(round(x, digits), nsmall = digits) }
+get_npct <- function(num, denom){
+  sprintf("%s (%s%%)", num, round((num / denom) * 100))
+}
+describe_cont <- function(
+  v_q50, v_q25, v_q75, v_mean, v_sd, dig_iqr = 0, dig_msd = 2
+){
+  sprintf(
+    "%s [%s, %s]\\\n%s +/- %s",
+    rndformat(v_q50, digits = dig_iqr),
+    rndformat(v_q25, digits = dig_iqr),
+    rndformat(v_q75, digits = dig_iqr),
+    rndformat(v_mean, digits = dig_msd),
+    rndformat(v_sd, digits = dig_msd)
+  )
+}
+
+## Wrapper with my preferred options for printing summaryM objects
+my_html <- function(sMobj, caption){
+  html(
+    sMobj,
+    exclude1 = FALSE, long = TRUE, digits = 2, what = "%", npct = "both",
+    prmsd = TRUE, brmsd = TRUE, middle.bold = TRUE,
+    ## These options don't seem to be working.
+    msdsize = mu$smaller2, outer.size = mu$smaller2, rowsep = TRUE,
+    caption = caption
+  )
+}
+
+## kable_styling wrapper to ensure all tables are consistently styled
+mykablestyle <- function(obj, stripes = FALSE, ...){
+  boptions <- c("hover", "responsive", "condensed", "bordered")
+  if(stripes){ boptions <- c(boptions, "striped") }
+  
+  kable_styling(
+    obj,
+    bootstrap_options = boptions,
+    full_width = FALSE,
+    ...
+  )
+}
+
+```
+
+```{r captions}
+## -- Table and figure captions ------------------------------------------------
+table_nums <- captioner(prefix = "Table")
+fig_nums <- captioner(prefix = "Figure")
+
+# table_nums(
+#   name = "screening", caption = "Overview of Screening, Exclusions & Randomization"
+# )
+# 
+# fig_nums(name = "exclusions", caption = "Study Exclusions")
+
+```
+
+```{r load_data}
+## -- Source script that reads in, combines current data from all studies ------
+source("combine_data.R")
+
+```
+
+# Description of Cohort
+
+# Description of Enzyme Measures
+
+# Enzymes vs Mental Status

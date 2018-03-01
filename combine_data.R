@@ -15,6 +15,7 @@ library(stringr)
 ## - All CADUCEUS-specific variables (CADUCEUS form)
 ## - Demographic info: dob, enrollment date, gender
 ## - Enrollment info: MV, sepsis, shock at enrollment
+## - Death info: did they die during hospitalization?
 ## - Daily info: mental status (CAM, RASS)
 ## These variables may be stored differently in the three databases.
 
@@ -22,12 +23,14 @@ library(stringr)
 ## Enrollment: id, dob, gender, enroll_time
 ## ICU type, MV, sepsis, shock at enrollment: Could not find these
 ##  One ICU reason = sepsis/septic shock; also hemorrhagic shock
+## Death: death_time, hospdis_time
 ## Daily info: rass_actual_1/2, cam_1/2
 
 ## MOSAIC variable names
 ## Enrollment: id, dob, gender, enroll_dttm
 ## ICU type, MV, sepsis, shock: organ_fail_present (1 = MV, 3 = shock)
 ##  One ICU reason = sepsis/septic shock
+## Death: death_dttm, hospdis_dttm
 ## Daily info: rass_actual_1/2, cam_1/2
 
 ## INSIGHT variable names
@@ -36,6 +39,7 @@ library(stringr)
 ##  - resp_random = Yes + resp_present_1 (MV)
 ##  - shock_random
 ##  - sepsis: can't find anything (inc ICU admission reason)
+## Death: death_dttm, hospdis_dttm
 ## Daily info: rass_actual_1/2, cam_1/2
 
 ## For each study, want:
@@ -78,28 +82,45 @@ export_oneobs <- function(rctoken, vnames){
       )
   }
 
-  ## All names are consistent except for enrollment date/time
-  names(df) <- str_replace(names(df), "^enroll\\_time$", "enroll_dttm")
+  ## All names are consistent except for date/times
+  names(df) <- str_replace(names(df), "\\_time$", "_dttm")
 
-  return(df %>% dplyr::select(id, dob, enroll_dttm, gender))
+  return(df %>% dplyr::select(id, dob, gender, ends_with("_dttm")))
 }
 
 ## Extract raw data for each study and combine into a single df
 oneobs_df <- map2_dfr(
   .x = paste0(c("MENDS2", "MOSAIC", "INSIGHT"), "_IH_TOKEN"),
   .y = list(
-    c("id", "dob", "gender", "enroll_time"),
-    c("id", "dob", "gender", "enroll_dttm"),
-    c("id", "dob", "gender_birth", "gender_identity", "enroll_dttm")
+    c("id", "dob", "gender", "enroll_time", "death_time", "hospdis_time"),
+    c("id", "dob", "gender", "enroll_dttm", "death_dttm", "hospdis_dttm"),
+    c("id", "dob", "gender_birth", "gender_identity", "enroll_dttm",
+      "death_dttm", "hospdis_dttm")
   ),
   .f = export_oneobs
 ) %>%
-  ## Calculate age at enrollment
+  mutate_at(
+    vars(ends_with("_dttm")),
+    ~ as.POSIXct(., format = "%Y-%m-%d %H:%M", tz = "UTC")
+  ) %>%
   mutate(
+    ## Calculate age at enrollment
     dob = as.Date(dob, format = "%Y-%m-%d"),
-    enroll_dttm = as.POSIXct(enroll_dttm, format = "%Y-%m-%d %H:%M", tz = "UTC"),
     enroll_date = as.Date(enroll_dttm),
-    age = as.numeric(difftime(enroll_date, dob, units = "days")) / 365.25
+    age = as.numeric(difftime(enroll_date, dob, units = "days")) / 365.25,
+    
+    ## Determine whether patient died in the hospital
+    died_inhosp = factor(
+      case_when(
+        is.na(death_dttm) & is.na(hospdis_dttm)              ~ as.numeric(NA),
+        is.na(death_dttm) & !is.na(hospdis_dttm)             ~ 0,
+        !is.na(death_dttm) &
+          (is.na(hospdis_dttm) | hospdis_dttm >= death_dttm) ~ 1,
+        TRUE                                                 ~ 0
+      ),
+      levels = 0:1,
+      labels = c("Survived hospitalization", "Died in hospital")
+    )
   )
 
 ## -- RASS, CAM, CADUCEUS info for each study ----------------------------------
@@ -226,7 +247,7 @@ mental_pt <- mental_day_df %>%
 
 ## Add patient info onto oneobs_df; keep only needed variables
 oneobs_df <- left_join(oneobs_df, mental_pt, by = "id") %>%
-  dplyr::select(id, gender, age)
+  dplyr::select(id, gender, age, days_del, days_coma, died_inhosp)
 
 ## Remove unwanted datasets from workspace
 rm("mental_day_df", "mental_df", "mental_pt")

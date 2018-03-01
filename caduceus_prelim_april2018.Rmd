@@ -89,15 +89,13 @@ mykablestyle <- function(obj, stripes = FALSE, ...){
 
 ```
 
-```{r captions}
+```{r captions, results = "hide"}
 ## -- Table and figure captions ------------------------------------------------
 table_nums <- captioner(prefix = "Table")
 fig_nums <- captioner(prefix = "Figure")
 
-# table_nums(
-#   name = "screening", caption = "Overview of Screening, Exclusions & Randomization"
-# )
-# 
+table_nums(name = "descriptives", caption = "Description of CADUCEUS Cohort")
+
 # fig_nums(name = "exclusions", caption = "Study Exclusions")
 
 ```
@@ -106,9 +104,85 @@ fig_nums <- captioner(prefix = "Figure")
 ## -- Source script that reads in, combines current data from all studies ------
 source("combine_data.R")
 
+## -- Restrict cohort to patients, days with >=1 enzyme measurement ------------
+daily_df <- filter(
+  daily_df,
+  !is.na(cad_ache_ul) | !is.na(cad_ache_ughb) | !is.na(cad_bche_ul)
+)
+
+# ## What study days have enzymes?
+# ggplot(data = daily_df, aes(x = cad_day)) +
+#   geom_bar(stat = "count") +
+#   labs(
+#     x = "Study Day (CADUCEUS Date - Enrollment Date)",
+#     y = "Number of Enzyme Measurements"
+#   )
+
+## We want to focus on study days 1/3/5/7/14. These study days should have blood
+## draws often, per the various study protocols, and thus have the most enzyme
+## measurements. Other blood draws occur at the time of hospital discharge,
+## which varies per patient and thus is less helpful for our current purposes.
+
+## Due to common data collection happenings, combine day 2 with day 1; 4 with 3;
+##  6 with 5
+daily_sub <- daily_df %>%
+  mutate(
+    cad_day = ifelse(cad_day <= 6 & cad_day %% 2 == 0, cad_day - 1, cad_day)
+  ) %>%
+  filter(cad_day %in% c(seq(1, 7, 2), 14))
+
+## Vector of unique patients with >=1 enzyme measurement
+cad_pts <- unique(daily_sub$id)
+
+## -- Add labels to descriptive dataset ----------------------------------------
+oneobs_desc <- subset(oneobs_df, id %in% cad_pts)
+label(oneobs_desc$age) <- "Age at enrollment"
+label(oneobs_desc$gender) <- "Gender"
+label(oneobs_desc$days_del) <- "Days with delirium"
+label(oneobs_desc$days_coma) <- "Days with coma"
+label(oneobs_desc$died_inhosp) <- "In-hospital mortality"
+
+## Dummy variable, because formatting
+oneobs_desc$allpts <- "All Patients"
+
 ```
 
 # Description of Cohort
+
+We currently have `r length(cad_pts)` patients, enrolled in three studies, with
+CADUCEUS enzyme measurements available on at least one of study days 1, 3, 5, 7,
+and/or 14.[^1] We focus on these days because the three study protocols require
+blood draws at various combinations of those time points, and thus most of our
+enzyme levels occur at those time points.[^2]
+
+[^1]: "Study day" = days after enrollment; study day 1 = day of enrollment.
+[^2]: Enzyme levels are available at other time points, generally because some
+patients also contributed blood levels at hospital discharge, which obviously
+varies per individual. Due to these varying timelines and low sample size on any
+given day, these are less helpful for our current purposes and are not included.
+
+`r table_nums("descriptives", display = "cite")` provides a basic description of
+these patients at study enrollment as well as information on their mental status
+throughout the study. **Note** that because our mortality rates among this
+critically ill cohort are high, durations of delirium and coma are often
+truncated by death.
+
+```{r descriptives}
+html(
+  summaryM(
+    age + gender + days_del + days_coma + died_inhosp ~ allpts,
+    data = oneobs_desc
+  ),
+  long = TRUE,
+  exclude1 = FALSE,
+  what = "%",
+  digits = 2,
+  npct = "both",
+  caption = "Cohort Baseline and In-Hospital Characteristics",
+  insert.bottom = "Note that because data collection is ongoing, hospital mortality status is not yet available on all patients."
+)
+
+```
 
 # Description of Enzyme Measures
 

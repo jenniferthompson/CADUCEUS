@@ -100,9 +100,7 @@ oneobs_df <- map2_dfr(
     enroll_dttm = as.POSIXct(enroll_dttm, format = "%Y-%m-%d %H:%M", tz = "UTC"),
     enroll_date = as.Date(enroll_dttm),
     age = as.numeric(difftime(enroll_date, dob, units = "days")) / 365.25
-  ) %>%
-  ## Remove identifiers
-  dplyr::select(id, gender, age)
+  )
 
 ## -- RASS, CAM, CADUCEUS info for each study ----------------------------------
 ## Function which extracts the variables we want from a given database, names
@@ -137,6 +135,7 @@ daily_df <- map2_dfr(
 ) %>%
   ## Data cleaning: different capitalizations in different studies
   mutate(
+    cad_date = as.Date(cad_date, format = "%Y-%m-%d"),
     cad_no = ifelse(
       tolower(cad_no) == "patient/surrogate refused",
       "Patient/surrogate refused",
@@ -205,10 +204,16 @@ mental_day_df <- mental_df %>%
   ) %>%
   ungroup()
 
-## Merge daily info onto daily_df, keep only needed variables
+## Merge daily info onto daily_df
 daily_df <-
   left_join(daily_df, mental_day_df, by = c("id", "redcap_event_name")) %>%
-  dplyr::select(id, redcap_event_name, cad_yn:cad_bche_ul, coma:normal)
+  ## Calculate study day
+  left_join(dplyr::select(oneobs_df, id, enroll_date), by = "id") %>%
+  mutate(
+    cad_day = as.numeric(difftime(cad_date, enroll_date, units = "days")) + 1
+  ) %>%
+  ## Keep only needed variables
+  dplyr::select(id, cad_day, cad_yn:cad_bche_ul, coma:normal)
 
 ## Summarize mental status by *patient* (days of delirium, coma)
 mental_pt <- mental_day_df %>%
@@ -219,8 +224,9 @@ mental_pt <- mental_day_df %>%
     days_coma = ifelse(n_days == 0, NA, sum(coma, na.rm = TRUE))
   )
 
-## Add patient info onto oneobs_df
-oneobs_df <- left_join(oneobs_df, mental_pt, by = "id")
+## Add patient info onto oneobs_df; keep only needed variables
+oneobs_df <- left_join(oneobs_df, mental_pt, by = "id") %>%
+  dplyr::select(id, gender, age)
 
 ## Remove unwanted datasets from workspace
 rm("mental_day_df", "mental_df", "mental_pt")

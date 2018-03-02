@@ -439,6 +439,12 @@ enzyme_plots_all <- map2(
 
 ## Visual Results{.tabset}
 
+On the left, we present raw data (points) overlaid with summary measures
+*(boxplots: middle line = median; leftmost line = 25th percentile; rightmost
+line = 75th percentile; extended lines cover all points within 1.5 x
+interquartile range of the median)*. On the right, we present density plots, a
+better representation of where our data is clustered.
+
 ### AChE, units/L
 
 ```{r ache_ul_overall, fig.height = 7}
@@ -698,6 +704,12 @@ print_descstats_status <- function(df){
 ```
 
 ## Visual Results{.tabset}
+
+On the top panels, we present raw data (points) overlaid with summary measures
+*(boxplots: middle line = median; leftmost line = 25th percentile; rightmost
+line = 75th percentile; extended lines cover all points within 1.5 x
+interquartile range of the median)*. On the bottom of each panel, we present
+density plots, a better representation of where our data is clustered.
 
 ### AChE, units/L
 

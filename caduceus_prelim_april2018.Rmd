@@ -28,9 +28,11 @@ suppressPackageStartupMessages(library(stringr))
 suppressPackageStartupMessages(library(glue))
 suppressPackageStartupMessages(library(kableExtra))
 suppressPackageStartupMessages(library(captioner))
-suppressPackageStartupMessages(library(rms))
-suppressPackageStartupMessages(library(naniar))
-suppressPackageStartupMessages(library(sparkline))
+suppressPackageStartupMessages(library(skimr))
+suppressPackageStartupMessages(library(patchwork))
+  ## Github only, till ggplot2 goes to CRAN :(
+suppressPackageStartupMessages(library(Hmisc))
+suppressPackageStartupMessages(library(ggridges))
 
 ## Hmisc setup for nicely printing summaryM output
 mu <- markupSpecs$html
@@ -127,7 +129,9 @@ daily_df <- filter(
 ##  6 with 5
 daily_sub <- daily_df %>%
   mutate(
-    cad_day = ifelse(cad_day <= 6 & cad_day %% 2 == 0, cad_day - 1, cad_day)
+    cad_day = ifelse(cad_day <= 6 & cad_day %% 2 == 0, cad_day - 1, cad_day),
+    ## Dummy variable for plotting
+    dummy = 1
   ) %>%
   filter(cad_day %in% c(seq(1, 7, 2), 14))
 
@@ -149,17 +153,23 @@ oneobs_desc$allpts <- "All Patients"
 
 # Description of Cohort
 
+## Definition and Enzyme Time Points
+
 We currently have `r length(cad_pts)` patients, enrolled in three studies, with
 CADUCEUS enzyme measurements available on at least one of study days 1, 3, 5, 7,
 and/or 14.[^1] We focus on these days because the three study protocols require
-blood draws at various combinations of those time points, and thus most of our
-enzyme levels occur at those time points.[^2]
+blood draws at subsets of those time points, and thus most of our enzyme levels
+are clustered on those days.[^2] (Levels on study days 2, 4, and 6 were
+clustered with the previous day's time point, in recognition of study protocols
+and common data collection experiences.)
 
 [^1]: "Study day" = days after enrollment; study day 1 = day of enrollment.
 [^2]: Enzyme levels are available at other time points, generally because some
 patients also contributed blood levels at hospital discharge, which obviously
 varies per individual. Due to these varying timelines and low sample size on any
 given day, these are less helpful for our current purposes and are not included.
+
+## Baseline and In-Hospital Characteristics
 
 `r table_nums("descriptives", display = "cite")` provides a basic description of
 these patients at study enrollment as well as information on their mental status
@@ -185,5 +195,283 @@ html(
 ```
 
 # Description of Enzyme Measures
+
+One goal of this exploratory study is to describe enzyme levels overall, and
+observe how they change (or don't), over time in our critically ill population.
+We measure three enzymes on multiple days throughout the index hospitalization:
+
+- AChE (acetylcholinesterase), units per liter (uL)
+- AChE, units per gram of hemoglobin (ugHb)
+- BChE (butyrylcholinesterase), units per liter
+
+The figures below show both the overall distribution of *all* enzyme levels
+during the entire hospitalization, and distributions by study day among patients
+who are still alive and in the ICU at each time point.
+
+```{r enzyme_overall, fig.height = 7, message = FALSE, warning = FALSE}
+## We will use these arguments >=3 times, so time to make 'em a list
+enzyme_args <- list(
+  enzyme_var = c("cad_ache_ul", "cad_ache_ughb", "cad_bche_ul"),
+  enzyme_title = c(
+    "AChE, units/L", "AChE, units/gram hemoglobin", "BChE, units/L"
+  )
+)
+
+## -- Calculate descriptive statistics for all enzymes, overall and by day -----
+enzyme_desc_all <- daily_sub %>%
+  dplyr::select(matches("cad\\_.*\\_u[lhgb]+$")) %>%
+  skimr::skim_to_wide() %>%
+  mutate(
+    desc_string = glue(
+      "N: {trimws(n)}\n",
+      "Median (IQR): {trimws(median)} ({trimws(p25)}, {trimws(p75)})\n",
+      "Mean (SD): {trimws(mean)} ({trimws(sd)})"
+    )
+  )
+
+enzyme_desc_daily <- daily_sub %>%
+  dplyr::select(cad_day, matches("cad\\_.*\\_u[lhgb]+$")) %>%
+  group_by(cad_day) %>%
+  skimr::skim_to_wide() %>%
+  mutate(
+    desc_string = glue(
+      "N: {trimws(n)}\n",
+      "Median (IQR): {trimws(median)} ({trimws(p25)}, {trimws(p75)})\n",
+      "Mean (SD): {trimws(mean)} ({trimws(sd)})"
+    )
+  )
+
+## -- Function to generate table of descriptives for a given enzyme ------------
+enzyme_sumtable <- function(enzyme_var, enzyme_title){
+  bind_rows(
+    filter(enzyme_desc_all, variable == enzyme_var) %>%
+      mutate(cad_day = 0),
+    filter(enzyme_desc_daily, variable == enzyme_var)
+  ) %>%
+    mutate_if(is.character, trimws) %>%
+    mutate_if(is.character, as.numeric) %>%
+    mutate(
+      cad_day_f = case_when(
+        cad_day == 0 ~ "Overall",
+        TRUE ~ paste("Day", cad_day)
+      )
+    ) %>%
+    dplyr::select(cad_day_f, n, median, p25, p75, mean, sd)
+}
+
+## Create a single df with all descriptives
+enzyme_descstats <- pmap(.l = enzyme_args, .f = enzyme_sumtable) %>%
+  reduce(left_join, by = "cad_day_f")
+
+## -- Data management for boxplots ---------------------------------------------
+enzyme_boxdata <- bind_rows(
+  daily_sub %>% mutate(cad_day = 0),
+  daily_sub
+) %>%
+  ## Create factor versions of study day
+  mutate(
+    cad_day_f = factor(
+      case_when(
+        cad_day == 0  ~ 21,
+        cad_day == 1  ~ 14,
+        cad_day == 3  ~ 7,
+        cad_day == 5  ~ 5,
+        cad_day == 7  ~ 3,
+        cad_day == 14 ~ 1,
+        TRUE ~ as.numeric(NA)
+      ),
+      levels = c(1, 3, 5, 7, 14, 21),
+      labels = c(paste("Day", c(14, 7, 5, 3, 1)), "Overall")
+    )
+  )
+
+## -- Function to create boxplots ----------------------------------------------
+enzyme_box <- function(enzyme_var, enzyme_title, df = enzyme_boxdata){
+  bp <- ggplot(
+    data = df, aes_string(x = "cad_day_f", y = enzyme_var, group = "cad_day_f")
+  ) +
+    geom_point(aes(colour = cad_day_f == "Overall"),
+               alpha = 0.2, position = position_jitter(width = 0.1)) +
+    geom_boxplot(
+      aes(size = cad_day_f == "Overall"),
+      fill = NA, outlier.shape = NA
+    ) +
+    scale_colour_manual(values = c("#B40F20", "#003D74"), guide = FALSE) +
+    scale_size_manual(values = c(0.5, 1.0), guide = FALSE) +
+    theme_bw() +
+    coord_flip() +
+    labs(
+      y = enzyme_title,
+      x = NULL
+    ) +
+    theme(
+      axis.ticks.y = element_blank(),
+      axis.text.y = element_text(face = "bold", size = 14)
+    )
+  
+  return(bp)
+}
+
+## -- Function to create ridgeplots --------------------------------------------
+enzyme_ridges <- function(enzyme_var, enzyme_title, df = enzyme_boxdata){
+  rp <- ggplot(data = df, aes_string(y = "cad_day_f", x = enzyme_var)) +
+    ggridges::geom_density_ridges(
+      aes(fill = cad_day_f == "Overall"), alpha = 0.8
+    ) +
+    scale_fill_manual(values = c("#B40F20", "#003D74"), guide = FALSE) +
+    theme_bw() +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank()
+    ) +
+    labs(x = enzyme_title)
+  
+  return(rp)
+}
+
+## -- Function to combine boxplots + ridgeplots for a single enzyme ------------
+enzyme_combined <- function(bp, rp, cwidths = c(2, 1)){
+  bp + rp + plot_layout(ncol = 2, widths = cwidths)
+}
+
+## -- Use purrr to make overall plots for all enzymes --------------------------
+enzyme_boxplots <- map2(
+  .x = c("cad_ache_ul", "cad_ache_ughb", "cad_bche_ul"),
+  .y = c("AChE, units/L", "AChE, units/gram hemoglobin", "BChE, units/L"),
+  .f = enzyme_box
+)
+
+enzyme_ridgeplots <- map2(
+  .x = c("cad_ache_ul", "cad_ache_ughb", "cad_bche_ul"),
+  .y = c("AChE, units/L", "AChE, units/gram hemoglobin", "BChE, units/L"),
+  .f = enzyme_ridges
+)
+
+enzyme_plots <- map2(
+  .x = enzyme_boxplots, .y = enzyme_ridgeplots, .f = enzyme_combined
+)
+
+## Old code; saving only till I get input from PIs on visual types
+# ache_ul_overall <- ggplot() +
+#   # ## Add shading in middle 80%
+#   # geom_rect(
+#   #   xmin = as.numeric(subset(enzyme_desc_all, variable == "cad_ache_ul")$p10),
+#   #   xmax = as.numeric(subset(enzyme_desc_all, variable == "cad_ache_ul")$p90),
+#   #   ymin = -Inf, ymax = Inf,
+#   #   data = subset(enzyme_desc_all, variable == "cad_ache_ul"),
+#   #   fill = "grey50", alpha = 0.2
+#   # ) +
+#   # ## Add shading in middle 50%
+#   # geom_rect(
+#   #   xmin = as.numeric(subset(enzyme_desc_all, variable == "cad_ache_ul")$p25),
+#   #   xmax = as.numeric(subset(enzyme_desc_all, variable == "cad_ache_ul")$p75),
+#   #   ymin = -Inf, ymax = Inf,
+#   #   data = subset(enzyme_desc_all, variable == "cad_ache_ul"),
+#   #   fill = "grey30", alpha = 0.2
+#   # ) +
+#   # geom_vline(
+#   #   xintercept = as.numeric(subset(enzyme_desc_all, variable == "cad_ache_ul")$median),
+#   #   linetype = "dotted"
+#   # ) +
+#   geom_histogram(
+#     aes(x = cad_ache_ul), data = daily_sub, fill = "#B40F20"#, alpha = 0.6
+#   ) +
+#   geom_text(
+#     aes(x = 8750, y = 40, label = desc_string),
+#     hjust = 1,
+#     size = 4,
+#     data = enzyme_desc_all %>% filter(variable == "cad_ache_ul")
+#   ) +
+#   ## Can't get this to work well
+#   # ggstance::geom_boxploth(aes(x = cad_ache_ul, y = 0), data = daily_sub, fill = NA) +
+#   labs(
+#     title = expression("AChE, "*mu*"L, All Study Days Combined"),
+#     # subtitle = enzyme_desc_all %>%
+#     #   filter(variable == "cad_ache_ul") %>%
+#     #   pull(desc_string),
+#     x = expression("AChE, "*mu*"L"),
+#     y = "Frequency"
+#   ) +
+#     theme_minimal()
+# 
+# # ache_ul_overall
+# 
+# ache_ul_daily <- ggplot(data = daily_sub) +
+#   facet_wrap(~ cad_day, ncol = 1) +
+#   geom_histogram(
+#     aes(x = cad_ache_ul), data = daily_sub, fill = "#B40F20"#, alpha = 0.6
+#   ) +
+#   geom_text(
+#     aes(x = 8750, y = 10, label = desc_string),
+#     hjust = 1,
+#     size = 3,
+#     data = enzyme_desc_daily %>% filter(variable == "cad_ache_ul")
+#   ) +
+#   labs(
+#     title = expression("AChE, "*mu*"L, By Study Day"),
+#     x = expression("AChE, "*mu*"L"),
+#     y = NULL
+#   ) +
+#     theme_minimal()
+# 
+# # ache_ul_daily
+# 
+# # ache_ul_raw <- ggplot(data = daily_sub, aes(y = cad_ache_ul, x = dummy)) +
+# #   geom_point(position = position_jitter()) +
+# #   geom_boxplot(fill = NA) +
+# #   coord_flip() +
+# #   theme_minimal()
+# # 
+# # ache_ul_raw
+# 
+# ache_ul_overall + ache_ul_daily + plot_layout(nrow = 1, widths = c(2, 1))
+
+```
+
+## Visual{.tabset}
+
+### AChE, units/L
+
+```{r ache_ul_overall, fig.height = 7}
+enzyme_plots[[1]]
+
+```
+
+### AChE, units/gram hemoglobin
+
+```{r ache_ughb_overall, fig.height = 7}
+enzyme_plots[[2]]
+
+```
+
+### BChE, units/L
+
+```{r bche_ul_overall, fig.height = 7}
+enzyme_plots[[3]]
+
+```
+
+## Tabular
+
+```{r enzyme_desc}
+kable(
+  enzyme_descstats,
+  format = "html",
+  col.names = c(
+    "Study Day",
+    rep(c("N", "Median", "25th %ile", "75th %ile", "Mean", "SD"), 3)
+  )
+) %>%
+  add_header_above(
+    c(" " = 1,
+      "AChE, units/L" = 6,
+      "AChE, units/gram hemoglobin" = 6,
+      "BChE, units/L" = 6)
+  ) %>%
+  mykablestyle(stripes = TRUE) %>%
+  scroll_box(width = "700px")
+
+```
 
 # Enzymes vs Mental Status
